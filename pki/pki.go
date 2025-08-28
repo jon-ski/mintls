@@ -473,7 +473,7 @@ func validateLeafParams(p LeafParams) error {
 
 func leafNotBeforeAfter(validFor time.Duration) (time.Time, time.Time) {
 	if validFor <= 0 {
-		validFor = 397 * 24 * time.Hour
+		validFor = DefaultLeafValidFor
 	}
 	nb := time.Now().UTC().Add(-5 * time.Minute)
 	return nb, nb.Add(validFor)
