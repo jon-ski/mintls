@@ -376,9 +376,14 @@ func CreateCA(params CAParams) (caCert *x509.Certificate, caKey crypto.Signer, p
 		return nil, nil, Pair{}, fmt.Errorf("MarshalPKCS8PrivateKey: %w", err)
 	}
 
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8})
+
 	return parsed, priv, Pair{
 		CertDER:  der,
 		KeyPKCS8: pkcs8,
+		CertPEM:  certPEM,
+		KeyPEM:   keyPEM,
 	}, nil
 }
 
@@ -458,7 +463,15 @@ func IssueLeaf(caCert *x509.Certificate, caKey crypto.Signer, params LeafParams)
 		return nil, nil, Pair{}, fmt.Errorf("MarshalPKCS8PrivateKey: %w", err)
 	}
 
-	return c, priv, Pair{CertDER: der, KeyPKCS8: pkcs8}, nil
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8})
+
+	return c, priv, Pair{
+		CertDER:  der,
+		KeyPKCS8: pkcs8,
+		CertPEM:  certPEM,
+		KeyPEM:   keyPEM,
+	}, nil
 }
 
 func validateLeafParams(p LeafParams) error {
