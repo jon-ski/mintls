@@ -430,6 +430,10 @@ func IssueLeaf(caCert *x509.Certificate, caKey crypto.Signer, params LeafParams)
 	}
 
 	notBefore, notAfter := leafNotBeforeAfter(params.ValidFor)
+	if caCert.NotAfter.Before(notAfter) {
+		notAfter = caCert.NotAfter
+	}
+
 	serial, err := randSerial128()
 	if err != nil {
 		return nil, nil, Pair{}, err
