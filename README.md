@@ -166,7 +166,7 @@ srv := &http.Server{
 * **TLS 1.3 only**
 * **CA validity:** 5 years
 * **Leaf validity:** 397 days
-* **SANs required**
+* **SANs:** Required for server certificates (DNS/IP must cover connectable names). Optional for client-only certificates; CN or a URI SAN can serve as identity.
 * **KeyUsage/EKU:** least-privilege
 * **PKCS#8 keys** (0600); certs (0644)
 * **Atomic file writes**

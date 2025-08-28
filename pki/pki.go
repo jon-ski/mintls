@@ -7,7 +7,9 @@
 //   - TLS 1.3 assumed
 //   - Root CA validity: 5 years
 //   - Leaf validity: 397 days
-//   - SANs required (DNS/IP); CN-only certs rejected
+//   - SANs required for server certificates (DNS/IP must cover connectable
+//     names). Optional for client-only certificates; CN or a URI SAN can serve
+//     as identity
 //   - KeyUsage/EKU restricted to least privilege
 //   - Keys written as PKCS#8 DER (0600)
 //   - Certs written as PEM (0644)
@@ -73,6 +75,7 @@ import (
 	"io/fs"
 	"math/big"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -253,6 +256,7 @@ type LeafParams struct {
 	CommonName string        // optional, typically device name
 	DNS        []string      // SANs
 	IPs        []net.IP      // SANs
+	URIs       []*url.URL    // optional, for client identity (e.g., spiffe:// or urn:uuid:)
 	ServerEKU  bool          // add ServerAuth EKU
 	ClientEKU  bool          // add ClientAuth EKU
 	ValidFor   time.Duration // default: 397d
@@ -438,6 +442,10 @@ func IssueLeaf(caCert *x509.Certificate, caKey crypto.Signer, params LeafParams)
 	if caCert.NotAfter.Before(notAfter) {
 		notAfter = caCert.NotAfter
 	}
+	if !notAfter.After(notBefora) {
+		return nil, nil, Pair{}, fmt.Errorf("cannot issue: CA expires (%s) before requested leaf validity (%s..%s)",
+			caCert.NotAfter.UTC().Format(time.RFC3339), notBefore.UTC().Format(time.RFC3339), notAfter.UTC().Format(time.RFC3339))
+	}
 
 	serial, err := randSerial128()
 	if err != nil {
@@ -448,7 +456,7 @@ func IssueLeaf(caCert *x509.Certificate, caKey crypto.Signer, params LeafParams)
 		return nil, nil, Pair{}, err
 	}
 
-	tpl := buildLeafTemplate(params, serial, notBefore, notAfter, caCert.SubjectKeyId)
+	tpl := buildLeafTemplate(params, serial, notBefore, notAfter, akiFromCA(caCert))
 
 	der, err := x509.CreateCertificate(rand.Reader, tpl, caCert, priv.Public(), caKey)
 	if err != nil {
@@ -481,6 +489,27 @@ func validateLeafParams(p LeafParams) error {
 	if p.ServerEKU && len(p.DNS) == 0 && len(p.IPs) == 0 {
 		return fmt.Errorf("server EKU requires at least one SAN (DNS or IP)")
 	}
+	if p.ClientEKU {
+		hasID := p.CommonName != "" || len(p.DNS) > 0 || len(p.IPs) > 0 || len(p.URIs) > 0
+		if !hasID {
+			return fmt.Errorf("client EKU requires at least one identifier (CN/DNS/IP/URI)")
+		}
+		for _, u := range p.URIs {
+			if !u.IsAbs() {
+				return fmt.Errorf("URI SAN must be absolute: %q", u.String())
+			}
+			switch u.Scheme {
+			case "spiffe":
+				if u.Host == "" {
+					return fmt.Errorf("spiffe:// URIs require a trust domain host: %q", u.String())
+				}
+			case "urn":
+				// optionally enforce urn:uuid:…
+			default:
+				// optionally restrict schemes
+			}
+		}
+	}
 	return nil
 }
 
@@ -494,7 +523,15 @@ func leafNotBeforeAfter(validFor time.Duration) (time.Time, time.Time) {
 
 func randSerial128() (*big.Int, error) {
 	limit := new(big.Int).Lsh(big.NewInt(1), 128)
-	return rand.Int(rand.Reader, limit)
+	for {
+		s, err := rand.Int(rand.Reader, limit)
+		if err != nil {
+			return nil, err
+		}
+		if s.Sign() != 0 {
+			return s, nil
+		}
+	}
 }
 
 func genLeafKey() (ed25519.PrivateKey, error) {
@@ -531,6 +568,7 @@ func buildLeafTemplate(p LeafParams, serial *big.Int, notBefore, notAfter time.T
 		DNSNames:              p.DNS,
 		IPAddresses:           ips,
 		AuthorityKeyId:        aki,
+		URIs:                  p.URIs,
 	}
 }
 
@@ -784,4 +822,18 @@ func ParseAnyKeyPEM(pemBytes []byte) (crypto.Signer, error) {
 			continue
 		}
 	}
+}
+
+func akiFromCA(ca *x509.Certificate) []byte {
+	if len(ca.SubjectKeyId) > 0 {
+		return ca.SubjectKeyId
+	}
+	spki, _ := x509.MarshalPKIXPublicKey(ca.PublicKey)
+	var alg pkix.AlgorithmIdentifier
+	var spk asn1.BitString
+	if _, err := asn1.Unmarshal(spki, &[]any{&alg, &spk}); err == nil {
+		sum := sha1.Sum(spk.Bytes)
+		return sum[:]
+	}
+	return nil
 }
